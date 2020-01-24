@@ -6,12 +6,14 @@ from .fitters.beta_geo_fitter import BetaGeoFitter
 from .fitters.beta_geo_beta_binom_fitter import BetaGeoBetaBinomFitter
 from .fitters.modified_beta_geo_fitter import ModifiedBetaGeoFitter
 from .fitters.pareto_nbd_fitter import ParetoNBDFitter
+from .fitters.pareto_nbd_with_covariates_fitter import ParetoNBDwithCovariatesFitter
 from .fitters.gamma_gamma_fitter import GammaGammaFitter
 
 __all__ = (
     "__version__",
     "BetaGeoFitter",
     "ParetoNBDFitter",
+    "ParetoNBDwithCovariatesFitter",
     "GammaGammaFitter",
     "ModifiedBetaGeoFitter",
     "BetaGeoBetaBinomFitter",

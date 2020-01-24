@@ -508,6 +508,210 @@ class TestParetoNBDFitter:
         )
 
 
+class TestParetoNBDwithCovariatesFitter(TestParetoNBDFitter):
+    def test_overflow_error(self):
+
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        params = np.array([10.465, 7.98565181e-03, 3.0516, 2.820])
+        freq = np.array([400.0, 500.0, 500.0])
+        rec = np.array([5.0, 1.0, 4.0])
+        age = np.array([6.0, 37.0, 37.0])
+        assert all([r < 0 and not np.isinf(r) and not pd.isnull(r) for r in ptf._log_A_0(params, freq, rec, age)])
+
+    def test_sum_of_scalar_inputs_to_negative_log_likelihood_is_equal_to_array(self):
+        ptf = lt.ParetoNBDwithCovariatesFitter
+        x = np.array([1, 3])
+        t_x = np.array([2, 2])
+        weights = np.array([1.0, 1.0])
+        t = np.array([5, 6])
+        params = [1, 1, 1, 1]
+        assert ptf()._negative_log_likelihood(
+            params, np.array([x[0]]), np.array([t_x[0]]), np.array([t[0]]), weights[0], 0
+        ) + ptf()._negative_log_likelihood(
+            params, np.array([x[1]]), np.array([t_x[1]]), np.array([t[1]]), weights[1], 0
+        ) == ptf()._negative_log_likelihood(
+            params, x, t_x, t, weights, 0
+        )
+
+    def test_params_out_is_close_to_Hardie_paper(self, cdnow_customers):
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"], iterative_fitting=3)
+        expected = np.array([0.553, 10.578, 0.606, 11.669])
+        npt.assert_array_almost_equal(expected, np.array(ptf._unload_params("r", "alpha_0", "s", "beta_0")), decimal=2)
+
+    def test_expectation_returns_same_value_as_R_BTYD(self, cdnow_customers):
+        """ From https://cran.r-project.org/web/packages/BTYD/BTYD.pdf """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"], tol=1e-6)
+
+        expected = np.array(
+            [
+                0.00000000,
+                0.05077821,
+                0.09916088,
+                0.14542507,
+                0.18979930,
+                0.23247466,
+                0.27361274,
+                0.31335159,
+                0.35181024,
+                0.38909211,
+            ]
+        )
+        actual = ptf.expected_number_of_purchases_up_to_time(range(10))
+        npt.assert_allclose(expected, actual, atol=0.01)
+
+    def test_conditional_expectation_returns_same_value_as_R_BTYD(self, cdnow_customers):
+        """ From https://cran.r-project.org/web/packages/BTYD/vignettes/BTYD-walkthrough.pdf """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+        x = 26.00
+        t_x = 30.86
+        T = 31
+        t = 52
+        expected = 25.46
+        actual = ptf.conditional_expected_number_of_purchases_up_to_time(t, x, t_x, T)
+        assert abs(expected - actual) < 0.01
+
+    def test_conditional_expectation_underflow(self):
+        """ Test a pair of inputs for the ParetoNBD ptf.conditional_expected_number_of_purchases_up_to_time().
+            For a small change in the input, the result shouldn't change dramatically -- however, if the
+            function doesn't guard against numeric underflow, this change in input will result in an
+            underflow error.
+        """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        alpha = 10.58
+        beta = 11.67
+        r = 0.55
+        s = 0.61
+        ptf.params_ = pd.Series({"alpha_0": alpha, "beta_0": beta, "r": r, "s": s, "gamma_1": 0, "gamma_2": 0})
+
+        # small change in inputs
+        left = ptf.conditional_expected_number_of_purchases_up_to_time(10, 132, 200, 200)  # 6.2060517889632418
+        right = ptf.conditional_expected_number_of_purchases_up_to_time(10, 133, 200, 200)  # 6.2528722475748113
+        assert abs(left - right) < 0.05
+
+    def test_conditional_probability_alive_is_between_0_and_1(self, cdnow_customers):
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+
+        for freq in np.arange(0, 100, 10.0):
+            for recency in np.arange(0, 100, 10.0):
+                for t in np.arange(recency, 100, 10.0):
+                    assert 0.0 <= ptf.conditional_probability_alive(freq, recency, t) <= 1.0
+
+    def test_conditional_probability_alive(self, cdnow_customers):
+        """
+        Target taken from page 8,
+        https://cran.r-project.org/web/packages/BTYD/vignettes/BTYD-walkthrough.pdf
+        """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.params_ = pd.Series(
+            *([0.5534, 10.5802, 0.6061, 11.6562, 0, 0], ["r", "alpha_0", "s", "beta_0", "gamma_1", "gamma_2"])
+        )
+        p_alive = ptf.conditional_probability_alive(26.00, 30.86, 31.00)
+        assert abs(p_alive - 0.9979) < 0.001
+
+    def test_conditional_probability_alive_overflow_error(self):
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.params_ = pd.Series(
+            *([10.465, 7.98565181e-03, 3.0516, 2.820, 0, 0], ["r", "alpha_0", "s", "beta_0", "gamma_1", "gamma_2"])
+        )
+        freq = np.array([40.0, 50.0, 50.0])
+        rec = np.array([5.0, 1.0, 4.0])
+        age = np.array([6.0, 37.0, 37.0])
+        assert all(
+            [
+                r <= 1 and r >= 0 and not np.isinf(r) and not pd.isnull(r)
+                for r in ptf.conditional_probability_alive(freq, rec, age)
+            ]
+        )
+
+    def test_conditional_probability_alive_matrix(self, cdnow_customers):
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+        Z = ptf.conditional_probability_alive_matrix()
+        max_t = int(ptf.data["T"].max())
+
+        for t_x in range(Z.shape[0]):
+            for x in range(Z.shape[1]):
+                assert Z[t_x][x] == ptf.conditional_probability_alive(x, t_x, max_t)
+
+    def test_fit_with_index(self, cdnow_customers):
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        index = range(len(cdnow_customers), 0, -1)
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"], index=index)
+        assert (ptf.data.index == index).all() == True
+
+        ptf = lt.ParetoNBDFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"], index=None)
+        assert (ptf.data.index == index).all() == False
+
+    def test_conditional_probability_of_n_purchases_up_to_time_is_between_0_and_1(self, cdnow_customers):
+        """
+        Due to the large parameter space we take a random subset.
+        """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+
+        for freq in np.random.choice(100, 5):
+            for recency in np.random.choice(100, 5):
+                for age in recency + np.random.choice(100, 5):
+                    for t in np.random.choice(100, 5):
+                        for n in np.random.choice(10, 5):
+                            assert (
+                                    0.0
+                                    <= ptf.conditional_probability_of_n_purchases_up_to_time(n, t, freq, recency, age)
+                                    <= 1.0
+                            )
+
+    def test_conditional_probability_of_n_purchases_up_to_time_adds_up_to_1(self, cdnow_customers):
+        """
+        Due to the large parameter space we take a random subset. We also restrict our limits to keep the number of
+        values of n for which the probability needs to be calculated to a sane level.
+        """
+        ptf = lt.ParetoNBDwithCovariatesFitter()
+        ptf.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+
+        for freq in np.random.choice(10, 5):
+            for recency in np.random.choice(9, 5):
+                for age in np.random.choice(np.arange(recency, 10, 1), 5):
+                    for t in 1 + np.random.choice(9, 5):
+                        npt.assert_almost_equal(
+                            np.sum(
+                                [
+                                    ptf.conditional_probability_of_n_purchases_up_to_time(n, t, freq, recency, age)
+                                    for n in np.arange(0, 20, 1)
+                                ]
+                            ),
+                            1.0,
+                            decimal=2,
+                        )
+
+    def test_fit_with_and_without_weights(self, cdnow_customers):
+        original_dataset_with_weights = cdnow_customers.copy()
+        original_dataset_with_weights = original_dataset_with_weights.groupby(["frequency", "recency", "T"]).size()
+        original_dataset_with_weights = original_dataset_with_weights.reset_index()
+        original_dataset_with_weights = original_dataset_with_weights.rename(columns={0: "weights"})
+
+        pnbd_noweights = lt.ParetoNBDwithCovariatesFitter()
+        pnbd_noweights.fit(cdnow_customers["frequency"], cdnow_customers["recency"], cdnow_customers["T"])
+
+        pnbd = lt.ParetoNBDwithCovariatesFitter()
+        pnbd.fit(
+            original_dataset_with_weights["frequency"],
+            original_dataset_with_weights["recency"],
+            original_dataset_with_weights["T"],
+            original_dataset_with_weights["weights"],
+        )
+
+        npt.assert_array_almost_equal(
+            np.array(pnbd_noweights._unload_params("r", "alpha_0", "s", "beta_0")),
+            np.array(pnbd._unload_params("r", "alpha_0", "s", "beta_0")),
+            decimal=2,
+        )
+
+
 class TestBetaGeoFitter:
     def test_sum_of_scalar_inputs_to_negative_log_likelihood_is_equal_to_array(self):
         bgf = lt.BetaGeoFitter
